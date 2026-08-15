@@ -192,30 +192,93 @@ with st.sidebar:
     st.divider()
     st.subheader("📌 CGC Reference Images")
     st.caption("Category Group Class - ye 'sahi' reference images hain jo tool me already upload hain.")
-    cgc_files = st.file_uploader(
-        "CGC images upload karein (multiple allowed)",
-        type=["png", "jpg", "jpeg", "webp"],
-        accept_multiple_files=True,
+    cgc_mode = st.radio(
+        "CGC images kaise denge?",
+        ["Excel/CSV file (with image link)", "Direct image files upload karo"],
+        help="Excel/CSV wale option me ek file dein jisme SKU/label naam aur uski image ka link ho — "
+        "bilkul jaise main shelf-image excel me hota hai.",
     )
 
     cgc_data = []  # list of (label, (b64, media_type))
-    if cgc_files:
-        st.caption("Har image ko ek naam/label dein (SKU/category naam):")
-        for i, f in enumerate(cgc_files):
-            default_label = f.name.rsplit(".", 1)[0]
-            label = st.text_input(f"Label for '{f.name}'", value=default_label, key=f"cgc_label_{i}")
-            img_bytes = f.read()
-            try:
-                img = Image.open(io.BytesIO(img_bytes))
-                if img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG")
-                img_bytes = buf.getvalue()
-                media_type = "image/jpeg"
-            except Exception:
-                media_type = f.type or "image/jpeg"
-            cgc_data.append((label, (to_b64(img_bytes), media_type)))
+
+    if cgc_mode == "Excel/CSV file (with image link)":
+        cgc_table_file = st.file_uploader(
+            "CGC file upload karein (Excel/CSV — SKU/label naam + image link column)",
+            type=["xlsx", "xls", "csv"],
+            key="cgc_table",
+        )
+        if cgc_table_file is not None:
+            if cgc_table_file.name.lower().endswith(".csv"):
+                cgc_df = pd.read_csv(cgc_table_file)
+            else:
+                cgc_df = pd.read_excel(cgc_table_file)
+
+            st.caption("Preview:")
+            st.dataframe(cgc_df.head(10), use_container_width=True)
+
+            cgc_cols = list(cgc_df.columns)
+            label_guess = next(
+                (c for c in cgc_cols if any(k in c.lower() for k in ["sku", "label", "name", "category", "cgc"])),
+                cgc_cols[0],
+            )
+            url_guess_cgc = next(
+                (c for c in cgc_cols if any(k in c.lower() for k in ["view", "image", "link", "url"])),
+                cgc_cols[-1],
+            )
+            cgc_label_col = st.selectbox("SKU/Label column", cgc_cols, index=cgc_cols.index(label_guess), key="cgc_label_col")
+            cgc_url_col = st.selectbox("Image link column", cgc_cols, index=cgc_cols.index(url_guess_cgc), key="cgc_url_col")
+
+            cgc_max_rows = st.number_input(
+                "Kitni CGC rows use karni hain",
+                min_value=1,
+                max_value=int(len(cgc_df)),
+                value=min(20, int(len(cgc_df))),
+                key="cgc_max_rows",
+            )
+
+            if st.button("📥 CGC images load karo", key="load_cgc_btn"):
+                with st.spinner("CGC images download ho rahi hain..."):
+                    loaded, failed = [], []
+                    for _, crow in cgc_df.head(int(cgc_max_rows)).iterrows():
+                        c_url = str(crow[cgc_url_col])
+                        c_label = str(crow[cgc_label_col])
+                        c_bytes, c_media_or_err = fetch_image_bytes(c_url)
+                        if c_bytes is None:
+                            failed.append((c_label, c_media_or_err))
+                            continue
+                        loaded.append((c_label, (to_b64(c_bytes), c_media_or_err)))
+                    st.session_state["cgc_loaded_data"] = loaded
+                    if failed:
+                        st.warning(f"{len(failed)} CGC image(s) load nahi ho payi (link check karein).")
+                    st.success(f"{len(loaded)} CGC reference image(s) load ho gayi.")
+
+        cgc_data = st.session_state.get("cgc_loaded_data", [])
+        if cgc_data:
+            st.caption(f"✅ {len(cgc_data)} CGC image(s) ready: " + ", ".join(l for l, _ in cgc_data))
+
+    else:
+        cgc_files = st.file_uploader(
+            "CGC images upload karein (multiple allowed)",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+        )
+        if cgc_files:
+            st.caption("Har image ko ek naam/label dein (SKU/category naam):")
+            for i, f in enumerate(cgc_files):
+                default_label = f.name.rsplit(".", 1)[0]
+                label = st.text_input(f"Label for '{f.name}'", value=default_label, key=f"cgc_label_{i}")
+                img_bytes = f.read()
+                try:
+                    img = Image.open(io.BytesIO(img_bytes))
+                    if img.mode in ("RGBA", "P"):
+                        img = img.convert("RGB")
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG")
+                    img_bytes = buf.getvalue()
+                    media_type = "image/jpeg"
+                except Exception:
+                    media_type = f.type or "image/jpeg"
+                cgc_data.append((label, (to_b64(img_bytes), media_type)))
 
 
 # ----------------------------------------------------------------------------
